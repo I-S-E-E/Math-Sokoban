@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Number Sokoban</title>
+<style>
+  body {
+    font-family: -apple-system, system-ui, sans-serif;
+    background: #1a1a1a;
+    color: #eee;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #info {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 16px;
+    font-size: 18px;
+  }
+  #info .target { color: #7ad97a; font-weight: bold; }
+  #board {
+    display: grid;
+    gap: 2px;
+    background: #333;
+    padding: 4px;
+    border-radius: 8px;
+    touch-action: none;
+  }
+  .cell {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    border-radius: 4px;
+  }
+  .cell.wall { background: #444; }
+  .cell.floor { background: #f0e6d2; }
+  .cell.exit { background: #7ad97a; }
+  .tile {
+    width: 42px;
+    height: 42px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 18px;
+    color: white;
+    background: #4a90d9;
+    z-index: 1;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+  }
+  .tile.tool { background: #d97a4a; }
+  .player {
+    position: absolute;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #222;
+    border: 3px solid white;
+    z-index: 2;
+    box-sizing: border-box;
+  }
+  #message {
+    margin-top: 16px;
+    font-size: 18px;
+    min-height: 1.4em;
+    color: #7ad97a;
+  }
+  #controls {
+    margin-top: 16px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  button {
+    padding: 10px 20px;
+    font-size: 16px;
+    border: none;
+    border-radius: 6px;
+    background: #4a90d9;
+    color: white;
+    cursor: pointer;
+  }
+  button:active { background: #357ab8; }
+  #random-btn { background: #d97a4a; }
+  #random-btn:active { background: #b86338; }
+  #level-select {
+    margin-top: 12px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .level-btn {
+    padding: 6px 14px;
+    font-size: 14px;
+    background: #555;
+  }
+  .level-btn.active {
+    background: #7ad97a;
+    color: #1a1a1a;
+  }
+</style>
+</head>
+<body>
+
+<div id="info">
+  <span>Target: <span class="target" id="target"></span></span>
+  <span>Moves: <span id="moves">0</span></span>
+</div>
+
+<div id="board"></div>
+
+<div id="message"></div>
+
+<div id="controls">
+  <button id="undo">Undo</button>
+  <button id="reset">Reset</button>
+  <button id="random-btn">🎲 New Random</button>
+</div>
+
+<div id="level-select"></div>
+
+<script>
+// ---------- HAND-CRAFTED LEVELS ----------
+const LEVELS = [
+  {
+    name: "Merge",
+    target: 7,
+    map: [
+      "#######",
+      "#..E..#",
+      "#.....#",
+      "#.....#",
+      "#.....#",
+      "#..P..#",
+      "#######"
+    ],
+    tiles: [
+      { r: 3, c: 3, value: 4, op: null },
+      { r: 4, c: 3, value: 3, op: '+' }
+    ]
+  },
+  {
+    name: "Route",
+    target: 10,
+    map: [
+      "#########",
+      "#E......#",
+      "#.......#",
+      "#.......#",
+      "#.......#",
+      "#.......#",
+      "#.......#",
+      "#...P...#",
+      "#########"
+    ],
+    tiles: [
+      { r: 3, c: 4, value: 7, op: null },
+      { r: 5, c: 4, value: 3, op: '+' }
+    ]
+  },
+  {
+    name: "Reduce",
+    target: 4,
+    map: [
+      "#########",
+      "#..E....#",
+      "#.......#",
+      "#.......#",
+      "#.......#",
+      "#.......#",
+      "#.......#",
+      "#...P...#",
+      "#########"
+    ],
+    tiles: [
+      { r: 4, c: 4, value: 9, op: null },
+      { r: 6, c: 4, value: 5, op: '-' }
+    ]
+  },
+  {
+    name: "Division",
+    target: 4,
+    map: [
+      "#########",
+      "#..E....#",
+      "#.......#",
+      "#.......#",
+      "#.......#",
+      "#.......#",
+      "#.......#",
+      "#...P...#",
+      "#########"
+    ],
+    tiles: [
+      { r: 4, c: 4, value: 12, op: null },
+      { r: 6, c: 4, value: 3, op: '÷' }
+    ]
+  }
+];
+
+// ---------- RANDOM LEVEL GENERATOR ----------
+// Build a level backwards from a solved state. Every step un-merges
+// the current value into a (base, tool) pair. When we run out of
+// steps, the base is the starting value at the exit, and the tools
+// are placed on rays out from the exit.
+function generateRandomLevel() {
+  const size = 8 + Math.floor(Math.random() * 3);
+  const rows = size, cols = size;
+
+  const grid = [];
+  for (let r = 0; r < rows; r++) {
+    grid[r] = [];
+    for (let c = 0; c < cols; c++) {
+      grid[r][c] = (r === 0 || r === rows - 1 || c === 0 || c === cols - 1) ? '#' : '.';
+    }
+  }
+
+  const exitR = 1 + Math.floor(Math.random() * (rows - 2));
+  const exitC = 1 + Math.floor(Math.random() * (cols - 2));
+  grid[exitR][exitC] = 'E';
+
+  const TARGETS = [6, 8, 9, 10, 12, 15, 16, 18, 20, 24];
+  const target = TARGETS[Math.floor(Math.random() * TARGETS.length)];
+
+  // Un-merge backwards
+  const chain = [];
+  let current = target;
+  const numSteps = 2 + Math.floor(Math.random() * 2);
+
+  for (let i = 0; i < numSteps; i++) {
+    const result = current;
+    const candidates = [];
+    for (let tool = 1; tool <= 9; tool++) {
+      const base = result - tool;
+      if (base >= 1 && base <= 40) candidates.push({ op: '+', tool, base, result });
+    }
+    for (let tool = 1; tool <= 9; tool++) {
+      const base = result + tool;
+      if (base >= 1 && base <= 40) candidates.push({ op: '-', tool, base, result });
+    }
+    for (let tool = 2; tool <= 5; tool++) {
+      if (result % tool === 0 && result / tool >= 1 && result / tool <= 40) {
+        candidates.push({ op: '×', tool, base: result / tool, result });
+      }
+    }
+    for (let tool = 2; tool <= 5; tool++) {
+      if (result * tool <= 40) candidates.push({ op: '÷', tool, base: result * tool, result });
+    }
+    if (candidates.length === 0) break;
+    const pick = candidates[Math.floor(Math.random() * candidates.length)];
+    chain.push(pick);
+    current = pick.base;
+  }
+
+  if (chain.length < 2) return generateRandomLevel();
+  chain.reverse();
+
+  // Place base at exit, then each tool on its own ray
+  const tiles = [{ r: exitR, c: exitC, value: chain[0].base, op: null }];
+  const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+  const placements = [];
+
+  for (let i = 0; i < chain.length; i++) {
+    const step = chain[i];
+    const options = [];
+
+    for (const [dr, dc] of dirs) {
+      // Each tool gets its own direction
+      if (placements.some(p => p.dr === dr && p.dc === dc)) continue;
+
+      for (let dist = 2; dist <= 4; dist++) {
+        const r = exitR + dr * dist;
+        const c = exitC + dc * dist;
+        if (r < 1 || r >= rows - 1 || c < 1 || c >= cols - 1) continue;
+        if (grid[r][c] !== '.') continue;
+
+        let clear = true;
+        for (let k = 1; k < dist; k++) {
+          const pr = exitR + dr * k;
+          const pc = exitC + dc * k;
+          if (grid[pr][pc] !== '.') { clear = false; break; }
+        }
+        if (!clear) continue;
+
+        const br = r + dr, bc = c + dc;
+        if (br < 1 || br >= rows - 1 || bc < 1 || bc >= cols - 1) continue;
+        if (grid[br][bc] !== '.') continue;
+
+        options.push({ dr, dc, dist, r, c });
+      }
+    }
+
+    if (options.length === 0) return generateRandomLevel();
+    const opt = options[Math.floor(Math.random() * options.length)];
+    tiles.push({ r: opt.r, c: opt.c, value: step.tool, op: step.op });
+    placements.push(opt);
+  }
+
+  // Add a few walls, but never on a solution path
+  const protectedCells = new Set([`${exitR},${exitC}`]);
+  for (const { dr, dc, dist } of placements) {
+    for (let k = 0; k <= dist + 1; k++) {
+      protectedCells.add(`${exitR + dr * k},${exitC + dc * k}`);
+    }
+  }
+
+  const numWalls = 1 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < numWalls; i++) {
+    const r = 1 + Math.floor(Math.random() * (rows - 2));
+    const c = 1 + Math.floor(Math.random() * (cols - 2));
+    if (grid[r][c] !== '.') continue;
+    if (protectedCells.has(`${r},${c}`)) continue;
+    if (tiles.some(t => t.r === r && t.c === c)) continue;
+    grid[r][c] = '#';
+  }
+
+  // Player starts somewhere free
+  const freeCells = [];
+  for (let r = 1; r < rows - 1; r++) {
+    for (let c = 1; c < cols - 1; c++) {
+      if (grid[r][c] !== '.') continue;
+      if (tiles.some(t => t.r === r && t.c === c)) continue;
+      freeCells.push({ r, c });
+    }
+  }
+  if (freeCells.length === 0) return generateRandomLevel();
+  const p = freeCells[Math.floor(Math.random() * freeCells.length)];
+  grid[p.r][p.c] = 'P';
+
+  return {
+    name: "Random",
+    target: target,
+    map: grid.map(row => row.join('')),
+    tiles: tiles
+  };
+}
+
+// ---------- GAME STATE ----------
+let level = null;
+let currentLevelIndex = 0;
+let walls = [];
+let rows = 0, cols = 0;
+let exit = { r: 0, c: 0 };
+let target = 0;
+let player = { r: 0, c: 0 };
+let tiles = [];
+let moveCount = 0;
+let history = [];
+
+// ---------- HELPERS ----------
+function tileAt(r, c) {
+  for (const t of tiles) {
+    if (t.r === r && t.c === c) return t;
+  }
+  return null;
+}
+
+function isWall(r, c) {
+  if (r < 0 || r >= rows || c < 0 || c >= cols) return true;
+  return walls[r][c];
+}
+
+function applyOp(op, toolValue, targetValue) {
+  if (op === '+') return targetValue + toolValue;
+  if (op === '-') return targetValue - toolValue;
+  if (op === '×') return targetValue * toolValue;
+  if (op === '÷') {
+    if (toolValue === 0) return null;
+    if (targetValue % toolValue !== 0) return null;
+    return targetValue / toolValue;
+  }
+  return null;
+}
+
+function isTool(t) {
+  return t.op !== null;
+}
+
+function tileLabel(t) {
+  return t.op ? (t.op + t.value) : String(t.value);
+}
+
+// ---------- UNDO ----------
+function snapshot() {
+  return {
+    player: { r: player.r, c: player.c },
+    tiles: tiles.map(t => ({ r: t.r, c: t.c, value: t.value, op: t.op })),
+    moveCount: moveCount
+  };
+}
+
+function restore(snap) {
+  player = { r: snap.player.r, c: snap.player.c };
+  tiles = snap.tiles.map(t => ({ r: t.r, c: t.c, value: t.value, op: t.op }));
+  moveCount = snap.moveCount;
+}
+
+// ---------- MOVEMENT ----------
+function tryMove(dr, dc) {
+  if (isSolved()) return;
+
+  const nr = player.r + dr;
+  const nc = player.c + dc;
+
+  if (isWall(nr, nc)) return;
+
+  const front = tileAt(nr, nc);
+
+  if (!front) {
+    history.push(snapshot());
+    player.r = nr;
+    player.c = nc;
+    moveCount++;
+    render();
+    return;
+  }
+
+  const br = nr + dr;
+  const bc = nc + dc;
+
+  if (isWall(br, bc)) return;
+
+  const beyond = tileAt(br, bc);
+
+  if (!beyond) {
+    history.push(snapshot());
+    front.r = br;
+    front.c = bc;
+    player.r = nr;
+    player.c = nc;
+    moveCount++;
+    render();
+    return;
+  }
+
+  if (!isTool(front)) return;
+
+  const result = applyOp(front.op, front.value, beyond.value);
+  if (result === null) return;
+
+  history.push(snapshot());
+  tiles.splice(tiles.indexOf(front), 1);
+  beyond.value = result;
+  beyond.op = null;
+  player.r = nr;
+  player.c = nc;
+  moveCount++;
+  render();
+}
+
+// ---------- WIN CHECK ----------
+function isSolved() {
+  const t = tileAt(exit.r, exit.c);
+  return t && !isTool(t) && t.value === target;
+}
+
+// ---------- RENDERING ----------
+const boardEl = document.getElementById('board');
+const targetEl = document.getElementById('target');
+const movesEl = document.getElementById('moves');
+const messageEl = document.getElementById('message');
+
+function render() {
+  boardEl.style.gridTemplateColumns = `repeat(${cols}, 48px)`;
+  boardEl.innerHTML = '';
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell ' + (walls[r][c] ? 'wall' : (r === exit.r && c === exit.c ? 'exit' : 'floor'));
+
+      const t = tileAt(r, c);
+      if (t) {
+        const tileEl = document.createElement('div');
+        tileEl.className = 'tile' + (isTool(t) ? ' tool' : '');
+        tileEl.textContent = tileLabel(t);
+        cell.appendChild(tileEl);
+      }
+
+      if (r === player.r && c === player.c) {
+        const playerEl = document.createElement('div');
+        playerEl.className = 'player';
+        cell.appendChild(playerEl);
+      }
+
+      boardEl.appendChild(cell);
+    }
+  }
+
+  targetEl.textContent = target;
+  movesEl.textContent = moveCount;
+  messageEl.textContent = isSolved() ? 'Solved!' : '';
+
+  updateLevelButtons();
+}
+
+// ---------- LEVEL BUTTONS ----------
+function buildLevelButtons() {
+  const container = document.getElementById('level-select');
+  container.innerHTML = '';
+  LEVELS.forEach((lv, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'level-btn';
+    btn.textContent = i + 1;
+    btn.addEventListener('click', () => loadLevel(i));
+    container.appendChild(btn);
+  });
+}
+
+function updateLevelButtons() {
+  const buttons = document.querySelectorAll('.level-btn');
+  buttons.forEach((btn, i) => {
+    btn.classList.toggle('active', i === currentLevelIndex);
+  });
+}
+
+// ---------- LEVEL LOADING ----------
+function setupLevel(lv, index) {
+  currentLevelIndex = index;
+  level = lv;
+  target = lv.target;
+  rows = lv.map.length;
+  cols = lv.map[0].length;
+
+  walls = [];
+  tiles = [];
+  player = { r: 0, c: 0 };
+  exit = { r: 0, c: 0 };
+  moveCount = 0;
+  history = [];
+
+  for (let r = 0; r < rows; r++) {
+    walls[r] = [];
+    for (let c = 0; c < cols; c++) {
+      const ch = lv.map[r][c];
+      walls[r][c] = (ch === '#');
+      if (ch === 'E') exit = { r, c };
+      if (ch === 'P') player = { r, c };
+    }
+  }
+
+  tiles = lv.tiles.map(t => ({ r: t.r, c: t.c, value: t.value, op: t.op }));
+
+  render();
+}
+
+function loadLevel(index) {
+  setupLevel(LEVELS[index], index);
+}
+
+function loadRandomLevel() {
+  setupLevel(generateRandomLevel(), -1);
+}
+
+// ---------- INPUT ----------
+document.addEventListener('keydown', e => {
+  const keys = {
+    ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1],
+    w: [-1, 0], s: [1, 0], a: [0, -1], d: [0, 1]
+  };
+  const k = keys[e.key];
+  if (k) {
+    e.preventDefault();
+    tryMove(k[0], k[1]);
+  }
+});
+
+let touchStart = null;
+boardEl.addEventListener('touchstart', e => {
+  const t = e.touches[0];
+  touchStart = { x: t.clientX, y: t.clientY };
+}, { passive: true });
+
+boardEl.addEventListener('touchend', e => {
+  if (!touchStart) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - touchStart.x;
+  const dy = t.clientY - touchStart.y;
+  touchStart = null;
+  if (Math.abs(dx) < 24 && Math.abs(dy) < 24) return;
+  if (Math.abs(dx) > Math.abs(dy)) {
+    tryMove(0, dx > 0 ? 1 : -1);
+  } else {
+    tryMove(dy > 0 ? 1 : -1, 0);
+  }
+}, { passive: true });
+
+// ---------- BUTTONS ----------
+document.getElementById('undo').addEventListener('click', () => {
+  if (history.length === 0) return;
+  restore(history.pop());
+  render();
+});
+
+document.getElementById('reset').addEventListener('click', () => {
+  if (currentLevelIndex === -1) {
+    loadRandomLevel();
+  } else {
+    loadLevel(currentLevelIndex);
+  }
+});
+
+document.getElementById('random-btn').addEventListener('click', loadRandomLevel);
+
+// ---------- START ----------
+buildLevelButtons();
+loadLevel(0);
+</script>
+</body>
+</html>
